@@ -23,8 +23,6 @@ if (!TOKEN) {
 }
 const PORT = process.env.PORT || 3000
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || ''
-const TG_CHANNEL_ID = process.env.TG_CHANNEL_ID || '' // ex: -1001234567890 (bot admin)
-const TG_GROUP_ID = process.env.TG_GROUP_ID || ''
 const REPO_URL = process.env.REPO_URL || 'https://whatsapp.com/channel/0029Vb7WJzp84OmBD0fEEJ2X'
 
 const SIGN = '> power by Mr Kira tech 🌐'
@@ -255,7 +253,6 @@ Clique sur le bouton pour continuer la liste…
 // ═════════════ TELEGRAM ═════════════
 const bot = new TelegramBot(TOKEN, { polling: true })
 const pendingPair = new Set()
-const verifiedCache = new Map()
 const lastPair = new Map()
 const sessions = new Map() // déclaré tôt pour les handlers
 
@@ -273,7 +270,6 @@ bot.setMyCommands([
 const typing = (chatId, a = 'typing') => bot.sendChatAction(chatId, a).catch(() => {})
 const EMO_A = ['📢', '🔔', '📣', '🔊']
 const EMO_B = ['👥', '🫂', '🤝', '👨‍👩‍👧‍👦']
-const EMO_C = ['✅', '🔒', '🛡️', '⚡']
 
 async function animateKeyboard(chatId, messageId, frames, delay = 1100) {
   for (const kb of frames) {
@@ -293,12 +289,12 @@ async function editMsg(chatId, messageId, text, isCaption = false, markup) {
     else await bot.editMessageText(text, o)
   } catch {}
 }
-async function loader(chatId, title, steps = 5, delay = 450) {
-  const m = await bot.sendMessage(chatId, `${title}\n${bar(0)} 0%`).catch(() => null)
+async function photoLoader(chatId, img, title, steps = 4, delay = 400) {
+  const m = await bot.sendPhoto(chatId, img, { caption: `${title}\n${bar(0)} 0%` }).catch(() => null)
   if (!m) return null
   for (let i = 1; i <= steps; i++) {
     await sleep(delay)
-    await editMsg(chatId, m.message_id, `${title}\n${bar(i / steps)} ${Math.round((i / steps) * 100)}%`)
+    await editMsg(chatId, m.message_id, `${title}\n${bar(i / steps)} ${Math.round((i / steps) * 100)}%`, true)
   }
   return m
 }
@@ -315,7 +311,7 @@ async function sendImg(chatId, img, text, opts = {}) {
 }
 
 // ----- Claviers -----
-const kbLinks = (i = 0, withVerify = false) => {
+const kbLinks = (i = 0) => {
   const rows = [
     [
       { text: `${EMO_A[i % 4]} Suivre la chaîne TG`, url: LINKS.tgChannel },
@@ -326,7 +322,6 @@ const kbLinks = (i = 0, withVerify = false) => {
       { text: `${EMO_B[(i + 1) % 4]} Groupe WhatsApp`, url: LINKS.waGroup }
     ]
   ]
-  if (withVerify) rows.push([{ text: `${EMO_C[i % 4]} Vérification obligatoire`, callback_data: 'verify' }])
   return rows
 }
 const kbCode = (code, i = 0, copyMode = true) => {
@@ -338,58 +333,29 @@ const kbCode = (code, i = 0, copyMode = true) => {
   ]]
 }
 
-// ----- Vérification obligatoire -----
+// ----- Utilisateurs -----
 function registerUser(id) {
   if (!db.users.includes(id)) { db.users.push(id); saveDb() }
 }
-async function isVerified(userId) {
-  const real = TG_CHANNEL_ID || TG_GROUP_ID
-  if (!real) return db.verified.includes(userId) // mode « clic » si IDs non configurés
-  if (verifiedCache.get(userId) > Date.now()) return true
-  try {
-    for (const id of [TG_CHANNEL_ID, TG_GROUP_ID].filter(Boolean)) {
-      const m = await bot.getChatMember(id, userId)
-      if (!['member', 'administrator', 'creator'].includes(m.status)) return false
-    }
-    verifiedCache.set(userId, Date.now() + 10 * 60 * 1000)
-    return true
-  } catch (e) {
-    console.error('verify:', e.message)
-    return false
-  }
-}
 async function guard(msg) {
   registerUser(msg.from.id)
-  if (await isVerified(msg.from.id)) return true
-  await typing(msg.chat.id)
-  await bot.sendMessage(
-    msg.chat.id,
-    '🔒 VÉRIFICATION OBLIGATOIRE\n\n1️⃣ Rejoins la chaîne et le groupe Telegram\n2️⃣ Clique sur « ✅ Vérifier »\n\nTu pourras ensuite utiliser le bot 🌹',
-    {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '📢 Chaîne TG', url: LINKS.tgChannel }, { text: '👥 Groupe TG', url: LINKS.tgGroup }],
-          [{ text: '✅ Vérifier', callback_data: 'verify' }]
-        ]
-      }
-    }
-  )
-  return false
+  return true
 }
 
 // ----- Commandes Telegram -----
 bot.onText(/^\/start(?:@\w+)?(?:\s.*)?$/, async (msg) => {
   registerUser(msg.from.id)
   const chatId = msg.chat.id
-  await typing(chatId)
-  const l = await loader(chatId, '🌹 KIRA TECH BOT — Démarrage…', 4, 350)
-  if (l) bot.deleteMessage(chatId, l.message_id).catch(() => {})
   await typing(chatId, 'upload_photo')
-  const sent = await sendImg(chatId, IMG.TG, MSG.start, { reply_markup: { inline_keyboard: kbLinks(0, true) } })
-  if (sent?.message_id) {
-    const frames = [1, 2, 3, 0, 1, 2, 3, 0].map((i) => kbLinks(i, true))
-    animateKeyboard(chatId, sent.message_id, frames)
+  const m = await photoLoader(chatId, IMG.TG, '🌹 KIRA TECH BOT — Démarrage…', 4, 350)
+  let id = m?.message_id
+  if (id) {
+    await sleep(300)
+    await editMsg(chatId, id, MSG.start, true, { inline_keyboard: kbLinks(0) })
+  } else {
+    id = (await sendImg(chatId, IMG.TG, MSG.start, { reply_markup: { inline_keyboard: kbLinks(0) } }))?.message_id
   }
+  if (id) animateKeyboard(chatId, id, [1, 2, 3, 0, 1, 2, 3, 0].map((i) => kbLinks(i)))
 })
 
 bot.onText(/^\/help(?:@\w+)?$/, async (msg) => {
@@ -402,15 +368,15 @@ bot.onText(/^\/menu(?:@\w+)?$/, async (msg) => {
   if (!(await guard(msg))) return
   const chatId = msg.chat.id
   await typing(chatId, 'upload_photo')
-  await bot.sendPhoto(chatId, IMG.OTHER).catch(() => {})
-  const m = await bot.sendMessage(chatId, `📜 Chargement du menu…\n${bar(0)} 0%`).catch(() => null)
-  if (!m) return
-  for (let i = 1; i <= 4; i++) {
-    await sleep(400)
-    await editMsg(chatId, m.message_id, `📜 Chargement du menu…\n${bar(i / 4)} ${i * 25}%`)
-  }
+  const m = await photoLoader(chatId, IMG.OTHER, '📜 Chargement du menu…', 4, 400)
+  if (!m) return sendImg(chatId, IMG.OTHER, MSG.menu)
   await sleep(300)
-  await editMsg(chatId, m.message_id, MSG.menu)
+  try {
+    await bot.editMessageCaption(MSG.menu, { chat_id: chatId, message_id: m.message_id })
+  } catch {
+    await editMsg(chatId, m.message_id, '🌐 KIRA TECH BOT 🌐\n⚜️ Auteur : Mr Kira Tech ⚜️', true)
+    await bot.sendMessage(chatId, MSG.menu).catch(() => {})
+  }
 })
 
 bot.onText(/^\/link(?:@\w+)?$/, async (msg) => {
@@ -445,7 +411,7 @@ bot.onText(/^\/pair(?:@\w+)?(?:\s+(.+))?$/, async (msg, match) => {
   const arg = match?.[1]
   if (!arg) {
     pendingPair.add(msg.from.id)
-    return bot.sendMessage(msg.chat.id, '📲 Envoie maintenant le numéro à connecter à WhatsApp\n✅ Exemple : 242XXXXXXXX (sans le +)')
+    return sendImg(msg.chat.id, IMG.OTHER, '📲 Envoie maintenant le numéro à connecter à WhatsApp\n✅ Exemple : 242XXXXXXXX (sans le +)')
   }
   return handlePair(msg, arg)
 })
@@ -463,38 +429,24 @@ bot.on('callback_query', async (q) => {
   const chatId = q.message?.chat.id
   const data = q.data || ''
   try {
-    if (data === 'verify') {
-      const real = TG_CHANNEL_ID || TG_GROUP_ID
-      if (!real && !db.verified.includes(q.from.id)) { db.verified.push(q.from.id); saveDb() }
-      const ok = await isVerified(q.from.id)
-      await bot.answerCallbackQuery(q.id, {
-        text: ok ? '✅ Vérification réussie !' : '❌ Rejoins d\'abord la chaîne ET le groupe, puis réessaie.',
-        show_alert: !ok
-      })
-      if (ok) {
-        await editMsg(chatId, q.message.message_id, '✅ VÉRIFIÉ !\n\nTape /pair 242XXXXXXXX pour connecter ton WhatsApp 🌹', q.message.photo ? true : false)
-        registerUser(q.from.id)
-      }
-    } else if (data === 'start') {
+    if (data === 'start') {
       await bot.answerCallbackQuery(q.id, { text: '▶️ Tape /start' })
-      bot.sendMessage(chatId, '▶️ Tape /start pour commencer.')
+      sendImg(chatId, IMG.TG, '▶️ Tape /start pour commencer.')
     } else if (data === 'check') {
       await bot.answerCallbackQuery(q.id, { text: `⛔ Numéros déjà connectés : ${db.connected.length}`, show_alert: true })
     } else if (data.startsWith('copy_')) {
       await bot.answerCallbackQuery(q.id, { text: '📄 Code envoyé, appuie dessus pour le copier' })
-      bot.sendMessage(chatId, `<code>${data.slice(5)}</code>`, { parse_mode: 'HTML' })
-    } else if (data.startsWith('testi_')) {
+      sendImg(chatId, IMG.TG, `<code>${data.slice(5)}</code>`, { parse_mode: 'HTML' })
+    } else if (data.startsWith('testi_') || data.startsWith('testp_')) {
       await bot.answerCallbackQuery(q.id)
       const page = parseInt(data.split('_')[1], 10) || 0
       const t = testimonials(page)
-      const rows = []
       const nav = []
-      if (page > 0) nav.push({ text: '⬅️ Retour', callback_data: `testi_${page - 1}` })
-      if (t.hasMore) nav.push({ text: '➡️ Suite', callback_data: `testi_${page + 1}` })
-      if (nav.length) rows.push(nav)
-      const markup = { inline_keyboard: rows }
-      if (q.message.text) await editMsg(chatId, q.message.message_id, t.text, false, markup)
-      else await bot.sendMessage(chatId, t.text, { reply_markup: markup })
+      if (page > 0) nav.push({ text: '⬅️ Retour', callback_data: `testp_${page - 1}` })
+      if (t.hasMore) nav.push({ text: '➡️ Suite', callback_data: `testp_${page + 1}` })
+      const markup = { inline_keyboard: nav.length ? [nav] : [] }
+      if (data.startsWith('testp_') && q.message.photo) await editMsg(chatId, q.message.message_id, t.text, true, markup)
+      else await sendImg(chatId, IMG.TG, t.text, { reply_markup: markup })
     } else {
       await bot.answerCallbackQuery(q.id)
     }
@@ -507,17 +459,17 @@ bot.on('polling_error', (e) => console.error('polling_error:', e.message))
 async function handlePair(msg, raw) {
   const chatId = msg.chat.id
   const number = raw.replace(/[\s\-()]/g, '')
-  if (!/^\d{8,15}$/.test(number)) return bot.sendMessage(chatId, MSG.badNumber)
+  if (!/^\d{8,15}$/.test(number)) return sendImg(chatId, IMG.OTHER, MSG.badNumber)
   const s = sessions.get(number)
   if (s?.sock?.authState?.creds?.registered) {
-    return bot.sendMessage(chatId, `✅ Le numéro ${number} est déjà connecté.\nTape .menu sur WhatsApp 📲`)
+    return sendImg(chatId, IMG.TG, `✅ Le numéro ${number} est déjà connecté.\nTape .menu sur WhatsApp 📲`)
   }
   const wait = (lastPair.get(msg.from.id) || 0) + 20000 - Date.now()
-  if (wait > 0) return bot.sendMessage(chatId, `⏳ Patiente ${Math.ceil(wait / 1000)}s avant une nouvelle demande.`)
+  if (wait > 0) return sendImg(chatId, IMG.OTHER, `⏳ Patiente ${Math.ceil(wait / 1000)}s avant une nouvelle demande.`)
   lastPair.set(msg.from.id, Date.now())
 
   await typing(chatId)
-  const m = await bot.sendMessage(chatId, MSG.pairing(number))
+  const m = await bot.sendPhoto(chatId, IMG.TG, { caption: MSG.pairing(number) })
   let stop = false
   const spin = ['🔄', '⏳', '📡', '🔁']
   const anim = (async () => {
@@ -526,7 +478,7 @@ async function handlePair(msg, raw) {
       await sleep(900)
       if (stop) break
       i++
-      await editMsg(chatId, m.message_id, `📡 Demande en cours pour ${number}… ${spin[i % 4]}\n${bar(Math.min(0.9, i / 10))} ${Math.min(90, i * 9)}%`)
+      await editMsg(chatId, m.message_id, `📡 Demande en cours pour ${number}… ${spin[i % 4]}\n${bar(Math.min(0.9, i / 10))} ${Math.min(90, i * 9)}%`, true)
     }
   })()
 
@@ -545,7 +497,7 @@ async function handlePair(msg, raw) {
     stop = true
     await anim
     if (!code) throw new Error('no code')
-    await editMsg(chatId, m.message_id, `✅ Code généré pour ${number}\n${bar(1)} 100%`)
+    await editMsg(chatId, m.message_id, `✅ Code généré pour ${number}\n${bar(1)} 100%`, true)
     await sleep(500)
     bot.deleteMessage(chatId, m.message_id).catch(() => {})
 
@@ -558,11 +510,11 @@ async function handlePair(msg, raw) {
       copyMode = false
       sent = await sendImg(chatId, IMG.TG, MSG.code(number, code), { reply_markup: { inline_keyboard: kbCode(code, 0, false) } })
     }
-        if (sent?.message_id) animateKeyboard(chatId, sent.message_id, [1, 2, 3, 0, 1, 2, 3, 0].map((i) => kbCode(code, i, copyMode)), 1100)
+    if (sent?.message_id) animateKeyboard(chatId, sent.message_id, [1, 2, 3, 0, 1, 2, 3, 0].map((i) => kbCode(code, i, copyMode)), 1100)
   } catch (e) {
     stop = true
     console.error('pair:', e.message)
-    editMsg(chatId, m.message_id, `❌ Impossible de générer le code pour ${number} pour le moment.\n🔁 Réessaie avec /pair ${number}`)
+    editMsg(chatId, m.message_id, `❌ Impossible de générer le code pour ${number} pour le moment.\n🔁 Réessaie avec /pair ${number}`, true)
   }
 }
 
@@ -570,7 +522,7 @@ async function congratsTelegram(chatId) {
   await typing(chatId, 'upload_photo')
   const frames = ['🔗 CONNEXION EN COURS…\n▰▰▰▱▱▱▱▱▱▱ 30%', '🔗 CONNEXION EN COURS…\n▰▰▰▰▰▰▱▱▱▱ 60%', '🎉 CONNEXION RÉUSSIE ✨\n▰▰▰▰▰▰▰▰▰▰ 100%', '🎊🎉🎊🎉🎊🎉🎊🎉🎊🎉']
   let sent
-  try { sent = await bot.sendPhoto(chatId, IMG.TG, { caption: frames[0] }) } catch { return bot.sendMessage(chatId, MSG.congratsTg()).catch(() => {}) }
+  try { sent = await bot.sendPhoto(chatId, IMG.TG, { caption: frames[0] }) } catch { return sendImg(chatId, IMG.TG, MSG.congratsTg()) }
   for (let i = 1; i < frames.length; i++) {
     await sleep(700)
     await editMsg(chatId, sent.message_id, frames[i], true)
@@ -609,7 +561,7 @@ async function createSession(number, { tgChatId = null, wantCode = false } = {})
     auth: state,
     logger,
     printQRInTerminal: false,
-    browser: Browsers.ubuntu('Chrome'),
+        browser: Browsers.ubuntu('Chrome'),
     markOnlineOnConnect: false,
     syncFullHistory: false
   })
@@ -632,7 +584,7 @@ async function createSession(number, { tgChatId = null, wantCode = false } = {})
       if (!sock.authState.creds.registered && !session.dead) {
         const chat = session.tgChatId
         await killSession(number, true)
-        if (chat) bot.sendMessage(chat, `⌛ Le code pour ${number} a expiré.\n🔁 Relance avec /pair ${number}`).catch(() => {})
+        if (chat) sendImg(chat, IMG.OTHER, `⌛ Le code pour ${number} a expiré.\n🔁 Relance avec /pair ${number}`)
       }
     }, 3 * 60 * 1000)
   }
@@ -650,7 +602,10 @@ async function createSession(number, { tgChatId = null, wantCode = false } = {})
         if (session.tgChatId) congratsTelegram(session.tgChatId)
         const self = sock.user.id.replace(/:\d+@/, '@')
         try {
-          await waAnim(sock, self, null, ['🔗 Connexion…\n▰▰▱▱▱▱▱▱▱▱', '🔗 Connexion…\n▰▰▰▰▰▰▱▱▱▱', '✅ Connecté !\n▰▰▰▰▰▰▰▰▰▰'], MSG.congratsWa(), 600)
+          const tmp = await waAnim(sock, self, null, ['🔗 Connexion…\n▰▰▱▱▱▱▱▱▱▱', '🔗 Connexion…\n▰▰▰▰▰▰▱▱▱▱'], '✅ Connecté !\n▰▰▰▰▰▰▰▰▰▰', 600)
+          await sleep(500)
+          await sock.sendMessage(self, { delete: tmp.key }).catch(() => {})
+          await waSay(sock, self, MSG.congratsWa(), { img: IMG.WA })
         } catch (e) { console.error('congrats wa:', e.message) }
       }
     }
@@ -723,6 +678,29 @@ async function waAnim(sock, jid, quoted, frames, final, delay = 500) {
   await sleep(delay)
   await sock.sendMessage(jid, { text: final, edit: sent.key }).catch(() => sock.sendMessage(jid, { text: final }))
   return sent
+}
+const imgCache = new Map()
+async function imgBuf(url) {
+  if (imgCache.has(url)) return imgCache.get(url)
+  try {
+    const b = await getBuffer(url)
+    imgCache.set(url, b)
+    return b
+  } catch { return { url } }
+}
+// Envoie TOUJOURS une image avec le texte en légende (texte long : image puis texte)
+async function waSay(sock, jid, text, { img = IMG.OTHER, quoted, mentions } = {}) {
+  const opts = quoted ? { quoted } : {}
+  const mn = mentions ? { mentions } : {}
+  try {
+    const image = await imgBuf(img)
+    if (text.length <= 1000) return await sock.sendMessage(jid, { image, caption: text, ...mn }, opts)
+    await sock.sendMessage(jid, { image }, opts)
+    return await sock.sendMessage(jid, { text, ...mn }, opts)
+  } catch (e) {
+    console.error('waSay:', e.message)
+    return sock.sendMessage(jid, { text, ...mn }, opts).catch(() => null)
+  }
 }
 const getSettings = (number) =>
   (db.settings[number] = { prefix: '.', name: 'KIRA TECH B0T🌹', antidelete: false, image: null, ...(db.settings[number] || {}) })
@@ -947,22 +925,19 @@ const sendRemoteImage = async (c, url, caption) => {
 // ----- GENERAL -----
 alias(['menu', 'help'], async (c) => {
   const st = c.st
-  const img = st.image && fs.existsSync(st.image) ? fs.readFileSync(st.image) : null
-  await c.sock.sendMessage(c.jid, { image: img || { url: IMG.WA }, caption: `🌹 ${st.name}\n\n${SIGN}` }, { quoted: c.m })
+    const img = st.image && fs.existsSync(st.image) ? fs.readFileSync(st.image) : null
+  await c.sock.sendMessage(c.jid, { image: img || (await imgBuf(IMG.WA)), caption: `🌹 ${st.name}\n\n${SIGN}` }, { quoted: c.m })
   const frames = ['⏳ Chargement du menu…\n▱▱▱▱▱ 0%', '⏳ Chargement du menu…\n▰▰▱▱▱ 40%', '⏳ Chargement du menu…\n▰▰▰▰▱ 80%', '✅ Menu prêt !\n▰▰▰▰▰ 100%']
   await waAnim(c.sock, c.jid, c.m, frames, `${waMenu(st)}\n\n${SIGN}`, 450)
 })
 COMMANDS.alive = async (c) => {
-  await c.sock.sendMessage(c.jid, {
-    image: { url: IMG.OTHER },
-    caption: `🛎 Le bot est en ligne et actif ✅\n🟢 STATUS ➜ OPEN\n📅 ${nowStr()}\n⏱️ Uptime : ${Math.floor(process.uptime() / 60)} min\n\n${SIGN}`
-  }, { quoted: c.m })
+  await c.reply(`🛎 Le bot est en ligne et actif ✅\n🟢 STATUS ➜ OPEN\n📅 ${nowStr()}\n⏱️ Uptime : ${Math.floor(process.uptime() / 60)} min`, { img: IMG.WA })
 }
 COMMANDS.ping = async (c) => {
   const t = Date.now()
-  const sent = await c.sock.sendMessage(c.jid, { text: '🏓 Ping…' }, { quoted: c.m })
+  await c.sock.sendPresenceUpdate('composing', c.jid)
   const ms = Date.now() - t
-  await c.sock.sendMessage(c.jid, { text: `🏓 Pong !\n⚡ Latence : ${ms} ms\n${bar(Math.max(0.1, 1 - ms / 2000))}\n\n${SIGN}`, edit: sent.key }).catch(() => {})
+  await c.reply(`🏓 Pong !\n⚡ Latence : ${ms} ms\n${bar(Math.max(0.1, 1 - ms / 500))}`, { img: IMG.WA })
 }
 COMMANDS.speed = async (c) => {
   const t = performance.now()
@@ -1009,7 +984,7 @@ COMMANDS.pair = async (c) => {
     try { code = await createSession(n, { wantCode: true }) } catch { await killSession(n, false); await sleep(1500) }
   }
   if (!code) return c.reply('❌ Impossible de générer le code pour le moment.')
-  await c.sock.sendMessage(c.jid, { image: { url: IMG.WA }, caption: MSG.code(n, code) }, { quoted: c.m })
+  await waSay(c.sock, c.jid, MSG.code(n, code), { img: IMG.WA, quoted: c.m })
 }
 COMMANDS.voice = async (c) => {
   const q = c.arg || textOf({ message: ctxOf(c.m)?.quotedMessage })
@@ -1032,7 +1007,7 @@ alias(['tagall'], async (c) => {
   if (!g) return
   const ids = g.meta.participants.map((p) => p.id)
   const body = `🌐 TAG ALL\n${c.arg ? `📝 ${c.arg}\n` : ''}\n${ids.map((i) => `➤ @${jidNum(i)}`).join('\n')}\n\nPower by Kira Tech Bot 🌐\n${SIGN}`
-  await c.sock.sendMessage(c.jid, { text: body, mentions: ids }, { quoted: c.m })
+  await waSay(c.sock, c.jid, body, { quoted: c.m, mentions: ids })
 })
 COMMANDS.tag = async (c) => {
   const g = await needGroup(c)
@@ -1041,7 +1016,7 @@ COMMANDS.tag = async (c) => {
   const ids = g.meta.participants.map((p) => p.id)
   if (c.arg || x?.mentionedJid?.length || x?.quotedMessage) {
     const text = c.arg || textOf({ message: x?.quotedMessage }) || '🏷'
-    return c.sock.sendMessage(c.jid, { text: `${text}\n\n${SIGN}`, mentions: g.senderAdmin ? ids : x?.mentionedJid || [] }, { quoted: c.m })
+    return c.reply(text, { mentions: g.senderAdmin ? ids : x?.mentionedJid || [] })
   }
   await c.reply('🏷 Usage : .tag texte (admins : mentionne tout le monde)')
 }
@@ -1079,10 +1054,7 @@ alias(['listadmin', 'staff'], async (c) => {
   const g = await needGroup(c)
   if (!g) return
   const admins = g.meta.participants.filter((p) => p.admin)
-  await c.sock.sendMessage(c.jid, {
-    text: `🧾 *ADMINS DU GROUPE* (${admins.length})\n\n${admins.map((a, i) => `${i + 1}. ${a.admin === 'superadmin' ? '👑' : '🛡'} @${jidNum(a.id)}`).join('\n')}\n\n${SIGN}`,
-    mentions: admins.map((a) => a.id)
-  }, { quoted: c.m })
+  await c.reply(`🧾 *ADMINS DU GROUPE* (${admins.length})\n\n${admins.map((a, i) => `${i + 1}. ${a.admin === 'superadmin' ? '👑' : '🛡'} @${jidNum(a.id)}`).join('\n')}`, { mentions: admins.map((a) => a.id) })
 })
 COMMANDS.add = async (c) => {
   const g = await needAdmin(c, true)
@@ -1246,10 +1218,7 @@ COMMANDS.kirabot = async (c) => {
     const g = await needGroup(c)
     if (!g) return
     const act = Object.entries(db.activity[c.jid] || {}).sort((x, y) => y[1] - x[1]).slice(0, 5)
-    return c.sock.sendMessage(c.jid, {
-      text: `👥 *${g.meta.subject}*\nMembres : ${g.meta.participants.length}\n\n🔥 MEMBRES LES PLUS ACTIFS\n${act.length ? act.map(([n, v], i) => `${NUM_EMOJI[i]} @${n} — ${v} msg`).join('\n') : 'Pas encore de données.'}\n\n${SIGN}`,
-      mentions: act.map(([n]) => n + '@s.whatsapp.net')
-    }, { quoted: c.m })
+    return c.reply(`👥 *${g.meta.subject}*\nMembres : ${g.meta.participants.length}\n\n🔥 MEMBRES LES PLUS ACTIFS\n${act.length ? act.map(([n, v], i) => `${NUM_EMOJI[i]} @${n} — ${v} msg`).join('\n') : 'Pas encore de données.'}`, { mentions: act.map(([n]) => n + '@s.whatsapp.net') })
   }
   await c.reply(`🤖 Salut ${prof.name} ! Voici ce que je sais faire :\n\n🧠 ${c.st.prefix}kirabot retiens <info>\n📝 ${c.st.prefix}kirabot notes\n📊 ${c.st.prefix}kirabot bilan\n👥 ${c.st.prefix}kirabot groupe\n🧹 ${c.st.prefix}kirabot oublie`)
 }
@@ -1334,7 +1303,7 @@ async function runCommand(session, m, text, fromLoop = false) {
   const [raw, ...args] = text.slice(st.prefix.length).trim().split(/\s+/)
   const cmd = (raw || '').toLowerCase()
   const fn = COMMANDS[cmd]
-  const reply = (t, extra = {}) => sock.sendMessage(jid, { text: `${t}\n\n${SIGN}`, ...extra }, { quoted: m })
+  const reply = (t, extra = {}) => waSay(sock, jid, `${t}\n\n${SIGN}`, { quoted: m, img: extra.img || IMG.OTHER, mentions: extra.mentions })
   if (!fn) {
     if (!fromLoop) await reply(`❓ Commande inconnue : ${st.prefix}${cmd}\nTape ${st.prefix}menu pour voir la liste.`)
     return
@@ -1352,7 +1321,7 @@ async function runCommand(session, m, text, fromLoop = false) {
 async function onWaMessage(session, m) {
   const { sock, number } = session
   if (!m.message || m.key.remoteJid === 'status@broadcast') return
-  const jid = m.key.remoteJid
+    const jid = m.key.remoteJid
   const isGroup = jid.endsWith('@g.us')
   const st = getSettings(number)
 
@@ -1362,7 +1331,7 @@ async function onWaMessage(session, m) {
     const orig = msgStore.get(proto.key?.id)
     if (orig && !orig.key.fromMe) {
       const who = orig.key.participant || orig.key.remoteJid
-      await sock.sendMessage(jid, { text: `🧨 ANTI-DELETE\n@${jidNum(who)} a supprimé ce message :`, mentions: [who] })
+      await waSay(sock, jid, `🧨 ANTI-DELETE\n@${jidNum(who)} a supprimé ce message :\n\n${SIGN}`, { mentions: [who] })
       await sock.sendMessage(jid, { forward: orig }).catch(() => {})
     }
     return
@@ -1391,12 +1360,12 @@ async function onWaMessage(session, m) {
       const del = () => sock.sendMessage(jid, { delete: m.key }).catch(() => {})
       if (cfg.antilink && !senderAdmin && /(https?:\/\/|chat\.whatsapp\.com|www\.)/i.test(text)) {
         if (botAdmin) await del()
-        return sock.sendMessage(jid, { text: `⚠️ @${jidNum(sender)} les liens sont interdits dans ce groupe.\n\n${SIGN}`, mentions: [sender] })
+        return waSay(sock, jid, `⚠️ @${jidNum(sender)} les liens sont interdits dans ce groupe.\n\n${SIGN}`, { mentions: [sender] })
       }
       const mentions = ctxOf(m)?.mentionedJid || []
       if (cfg.antitag && !senderAdmin && mentions.length >= Math.max(5, Math.floor(meta.participants.length * 0.5))) {
         if (botAdmin) await del()
-        return sock.sendMessage(jid, { text: `🏷 @${jidNum(sender)} les tags massifs sont interdits.\n\n${SIGN}`, mentions: [sender] })
+        return waSay(sock, jid, `🏷 @${jidNum(sender)} les tags massifs sont interdits.\n\n${SIGN}`, { mentions: [sender] })
       }
       if (cfg.antispam && !senderAdmin && text) {
         const k = jid + sender
@@ -1415,9 +1384,7 @@ async function onWaMessage(session, m) {
   // invitation toutes les 5 commandes
   if (session.cmdCount % 5 === 0) {
     await sleep(900)
-    await sock.sendMessage(jid, {
-      text: `📢 REJOINS-NOUS ! 🌹\n\n📢 Chaîne TG : ${LINKS.tgChannel}\n👥 Groupe TG : ${LINKS.tgGroup}\n📢 Chaîne WA : ${LINKS.waChannel}\n👥 Groupe WA : ${LINKS.waGroup}\n\n${SIGN}`
-    })
+    await waSay(sock, jid, `📢 REJOINS-NOUS ! 🌹\n\n📢 Chaîne TG : ${LINKS.tgChannel}\n👥 Groupe TG : ${LINKS.tgGroup}\n📢 Chaîne WA : ${LINKS.waChannel}\n👥 Groupe WA : ${LINKS.waGroup}\n\n${SIGN}`, { img: IMG.WA })
   }
 }
 const spamMap = new Map()
